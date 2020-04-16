@@ -14,7 +14,9 @@ def convert_label_to_similarity(normed_feature: Tensor, label: Tensor) -> Tuple[
     similarity_matrix = similarity_matrix.view(-1)
     positive_matrix = positive_matrix.view(-1)
     negative_matrix = negative_matrix.view(-1)
-    return similarity_matrix[positive_matrix], similarity_matrix[negative_matrix]
+    sp = similarity_matrix[positive_matrix]
+    sn = similarity_matrix[negative_matrix]
+    return sp, sn
 
 
 class CircleLoss(nn.Module):
