@@ -1,6 +1,7 @@
 import collections
 import os
 
+import logging
 import torch
 from torch import nn, Tensor
 from torch.optim import SGD
@@ -11,7 +12,8 @@ from tqdm import tqdm
 
 from circle_loss import convert_label_to_similarity, CircleLoss
 
-from template_lib.trainer.base_trainer import summary_defaultdict2txtfig, summary_dict2txtfig
+from template_lib.v2.config_cfgnode import update_parser_defaults_from_yaml, global_cfg
+from template_lib.v2.logger import global_textlogger, summary_defaultdict2txtfig
 
 
 def get_loader(datadir, is_train: bool, batch_size: int) -> DataLoader:
@@ -43,10 +45,9 @@ class Model(nn.Module):
         return nn.functional.normalize(feature)
 
 
-def main(myargs, resume: bool = True) -> None:
-    args = myargs.config
-
-    saved_model = os.path.join(myargs.args.outdir, "resume.state")
+def main(args, resume: bool = True) -> None:
+    logger = logging.getLogger('tl')
+    saved_model = os.path.join(args.tl_outdir, "resume.state")
 
     model = Model().cuda()
     optimizer = SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-5)
@@ -54,15 +55,13 @@ def main(myargs, resume: bool = True) -> None:
     val_loader = get_loader(datadir=args.datadir, is_train=False, batch_size=2)
     criterion = CircleLoss(m=0.25, gamma=80)
 
-    if resume and os.path.exists("resume.state"):
+    if args.tl_resume and os.path.exists("resume.state"):
         model.load_state_dict(torch.load("resume.state"))
     else:
         counter = 0
         for epoch in range(100000):
-            if args.dummy_train:
-                continue
-            myargs.logger.info(f'Epoch {epoch}')
-            pbar = tqdm(train_loader, desc=f'{myargs.args.time_str_suffix}', file=myargs.stdout)
+            logger.info(f'Epoch {epoch}')
+            pbar = tqdm(train_loader, desc=f'{args.tl_time_str}')
             for step, (img, label) in enumerate(pbar):
                 img = img.cuda()
                 label = label.cuda()
@@ -78,9 +77,9 @@ def main(myargs, resume: bool = True) -> None:
                     summary_dicts['sp_sn']['sn_mean'] = sn.mean().item()
                     summary_dicts['loss']['loss'] = loss.item()
                     summary_defaultdict2txtfig(default_dict=summary_dicts, prefix='train',
-                                               step=counter, textlogger=myargs.textlogger, save_fig_sec=90)
+                                               step=counter, textlogger=global_textlogger, save_fig_sec=90)
                 counter += 1
-            recal, pre, (tp, fp, fn, tn) = validate(val_loader=val_loader, model=model, stdout=myargs.stdout)
+            recal, pre, (tp, fp, fn, tn) = validate(val_loader=val_loader, model=model)
             summary_dicts = collections.defaultdict(dict)
             summary_dicts['recal']['recal'] = recal
             summary_dicts['pre']['pre'] = pre
@@ -89,17 +88,18 @@ def main(myargs, resume: bool = True) -> None:
             summary_dicts['tp_fp_fn_tn']['fn'] = fn
             summary_dicts['tp_fp_fn_tn']['tn'] = tn
             summary_defaultdict2txtfig(default_dict=summary_dicts, prefix='val',
-                                       step=epoch, textlogger=myargs.textlogger, save_fig_sec=90)
+                                       step=epoch, textlogger=global_textlogger, save_fig_sec=90)
+            if args.tl_debug: break
         torch.save(model.state_dict(), saved_model)
 
 
-def validate(val_loader, model, stdout):
+def validate(val_loader, model):
     tp = 0
     fn = 0
     fp = 0
     tn = 0
     thresh = 0.75
-    for img, label in tqdm(val_loader, file=stdout):
+    for img, label in tqdm(val_loader):
         img = img.cuda()
         label = label.cuda()
         pred = model(img)
@@ -122,17 +122,10 @@ def validate(val_loader, model, stdout):
 
 
 def run(argv_str=None):
-  from template_lib.utils.config import parse_args_and_setup_myargs, config2args
-  from template_lib.utils.modelarts_utils import prepare_dataset
-  run_script = os.path.relpath(__file__, os.getcwd())
-  args1, myargs, _ = parse_args_and_setup_myargs(argv_str, run_script=run_script, start_tb=False)
-  myargs.args = args1
-  myargs.config = getattr(myargs.config, args1.command)
 
-  if hasattr(myargs.config, 'datasets'):
-    prepare_dataset(myargs.config.datasets, cfg=myargs.config)
-
-  main(myargs)
+  parser = update_parser_defaults_from_yaml(parser=None, use_cfg_as_args=True)
+  args = parser.parse_args()
+  main(args)
 
 if __name__ == '__main__':
   run()
